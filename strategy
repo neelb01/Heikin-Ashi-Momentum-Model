@@ -1,0 +1,96 @@
+//==================================================
+// Heikin-Ashi Momentum Stacking Strategy
+// Author: Neel
+// Description: Quantitative trend-following model
+//==================================================
+
+
+//@version=6
+strategy("HA Momentum Stacking - Extended Logic",
+     overlay=true,
+     pyramiding=10,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=5)
+
+//━━━━━━━━ INPUTS ━━━━━━━━
+kCandles        = input.int(3, "K Consecutive Candles", minval=2)
+bodyLen         = input.int(20, "Body Avg Length")
+shadowPct       = input.float(0.10, "Allowed Shadow %", step=0.01)
+earlyMultiplier = input.float(1.8, "Early Entry Body Multiplier")
+atrLen          = input.int(14, "ATR Length")
+atrMult         = input.float(1.2, "ATR Multiplier")
+
+//━━━━━━━━ HEIKIN ASHI ━━━━━━━━
+haClose = (open + high + low + close) / 4
+var float haOpen = na
+haOpen := na(haOpen[1]) ? (open + close)/2 : (haOpen[1] + haClose[1]) / 2
+
+haHigh = math.max(high, math.max(haOpen, haClose))
+haLow  = math.min(low, math.min(haOpen, haClose))
+
+//━━━━━━━━ CANDLE METRICS ━━━━━━━━
+isBull = haClose > haOpen
+isBear = haClose < haOpen
+
+bodySize = math.abs(haClose - haOpen)
+bodyAvg  = ta.sma(bodySize, bodyLen)
+
+upperShadow = haHigh - math.max(haOpen, haClose)
+lowerShadow = math.min(haOpen, haClose) - haLow
+rangeSize   = haHigh - haLow
+
+//━━━━━━━━ STRONG CANDLE LOGIC ━━━━━━━━
+strongBull =isBull and lowerShadow <= rangeSize * shadowPct and bodySize > bodyAvg
+strongBear = isBear and upperShadow <= rangeSize * shadowPct and bodySize > bodyAvg
+
+//━━━━━━━━ MOMENTUM DETECTION ━━━━━━━━
+bullStrength = ta.sma(strongBull ? 1 : 0, kCandles)
+bearStrength = ta.sma(strongBear ? 1 : 0, kCandles)
+
+trendBull = bullStrength == 1
+trendBear = bearStrength == 1
+
+//━━━━━━━━ NEW ENTRY ADD-ON: 3 SMALL EQUAL WICK CANDLES ━━━━━━━━
+smallBody = bodySize < bodyAvg * 0.7
+equalWicks = math.abs(upperShadow - lowerShadow) < (rangeSize * 0.2)
+threeSmallIndecision = smallBody and equalWicks
+threeSmallSequence = threeSmallIndecision and threeSmallIndecision[1] and threeSmallIndecision[2]
+
+// final entry conditions
+longEntryFinal  = trendBull or (trendBull and threeSmallSequence)
+shortEntryFinal = trendBear or (trendBear and threeSmallSequence)
+
+//━━━━━━━━ NEW EXIT LOGIC (3 REVERSAL WICK CANDLES) ━━━━━━━━
+largeWicks = (upperShadow + lowerShadow) > bodySize * 1.5
+
+threeBearReversal = isBear and smallBody and largeWicks and isBear[1] and smallBody[1] and largeWicks[1] and isBear[2] and smallBody[2] and largeWicks[2]
+threeBullReversal = isBull and smallBody and largeWicks and isBull[1] and smallBody[1] and largeWicks[1] and isBull[2] and smallBody[2] and largeWicks[2]
+
+//━━━━━━━━ RISK MANAGEMENT ━━━━━━━━
+atr = ta.atr(atrLen)
+longSL  = strategy.position_avg_price - atrMult * atr
+shortSL = strategy.position_avg_price + atrMult * atr
+
+//━━━━━━━━ EXECUTION ━━━━━━━━
+if longEntryFinal
+    strategy.entry("Long", strategy.long)
+
+if shortEntryFinal
+    strategy.entry("Short", strategy.short)
+
+// EXIT CONDITIONS
+if threeBearReversal
+    strategy.close("Long")
+
+if threeBullReversal
+    strategy.close("Short")
+
+strategy.exit("Long SL", "Long", stop=longSL)
+strategy.exit("Short SL", "Short", stop=shortSL)
+
+//━━━━━━━━ VISUALS ━━━━━━━━
+barcolor(
+     strongBull ? color.green :
+     strongBear ? color.red :
+     color.gray
+)
